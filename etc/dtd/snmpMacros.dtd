@@ -1,0 +1,102 @@
+<?xml encoding="UTF-8"?>
+<!ENTITY % value.att
+	'type	(integer|
+		octetstring|
+		oid|
+		integer32|
+		ipaddress|
+		counter32|
+		gauge32|
+		unsigned32|
+		timeticks|
+		opaque|
+		counter64|
+		null)	#IMPLIED
+	value	CDATA	#IMPLIED'>
+
+<!ENTITY % varbind.att
+        'oid		CDATA	#REQUIRED
+        name		CDATA	#IMPLIED
+        %value.att;'>
+
+<!ENTITY % op.att
+        'destination	CDATA	#REQUIRED
+        %varbind.att;'>
+
+<!ELEMENT snmp (mib*,property*,task*)>
+<!ATTLIST snmp
+	version		(1|2|3) 		'3'
+	user		CDATA			#IMPLIED
+	authProtocol	(MD5|md5|SHA|sha)	'MD5'
+	authPassword 	CDATA 			#IMPLIED
+	privPassword 	CDATA 			#IMPLIED
+	community 	CDATA 			#IMPLIED
+	writeCommunity 	CDATA 			#IMPLIED
+>
+
+<!ELEMENT mib EMPTY>
+<!ATTLIST mib
+	name		CDATA 	#REQUIRED
+	location	CDATA	#REQUIRED
+>
+
+<!ELEMENT property EMPTY>
+<!ATTLIST property
+	name 		CDATA 	#REQUIRED
+	value 		CDATA 	#REQUIRED
+>
+
+<!ELEMENT task (trap*,get*,getNext*,getBulk*,set*,inform*,response*,runTask*)>
+<!ATTLIST task
+	 name 		CDATA 	#REQUIRED
+>
+
+<!ELEMENT trap (varBind)*>
+<!ATTLIST trap
+	version 	CDATA	#IMPLIED
+	%op.att;
+>
+
+<!ELEMENT get (varBind)*>
+<!ATTLIST get
+	%op.att;
+>
+
+<!ELEMENT getNext (varBind)*>
+<!ATTLIST getNext
+	%op.att;
+>
+
+<!ELEMENT getBulk (varBind)*>
+<!ATTLIST getBulk
+	nonrep 		CDATA 	#REQUIRED
+	maxrep 		CDATA 	#REQUIRED
+	%op.att;
+>
+
+<!ELEMENT set (varBind)*>
+<!ATTLIST set
+	%op.att;
+>
+
+<!ELEMENT inform (varBind)*>
+<!ATTLIST inform
+	%op.att;
+>
+
+<!ELEMENT response (varBind)*>
+<!ATTLIST response
+	%op.att;
+>
+
+<!ELEMENT varBind EMPTY>
+<!ATTLIST varBind
+	%varbind.att;
+>
+
+<!ELEMENT runTask EMPTY>
+<!ATTLIST runTask
+	name 		CDATA 	#REQUIRED
+	document 	CDATA 	#REQUIRED
+>
+

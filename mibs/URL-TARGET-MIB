@@ -1,0 +1,165 @@
+URL-TARGET-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+    MODULE-IDENTITY,
+    enterprises
+        FROM SNMPv2-SMI
+    SnmpTagList
+        FROM SNMP-TARGET-MIB
+    SnmpAdminString
+        FROM SNMP-FRAMEWORK-MIB
+    TEXTUAL-CONVENTION,
+    RowStatus,
+    TestAndIncr,
+    StorageType
+        FROM SNMPv2-TC;
+
+ipb  OBJECT IDENTIFIER ::=  {  enterprises  12499  }
+
+urlTargetMIB MODULE-IDENTITY
+    LAST-UPDATED    "0205041526Z"
+    ORGANIZATION    "Instituto Politecnico de Braganca / Universidade de Aveiro"    CONTACT-INFO    "Rui Pedro Lopes
+ESTiG - IPB
+Campus St Apolonia
+5300 Braganca
+Portugal
+rlopes@ipb.pt
+
+Jose Luis Oliveira
+DET-UA
+Campus Universitario
+3810 Aveiro
+Portugal
+jlo@det.ua.pt"
+    DESCRIPTION
+        "MIB to store and consult SNMP URLs"
+  ::= { ipb 2 }
+
+   urlTargetObjects       OBJECT IDENTIFIER ::= { urlTargetMIB 1 }
+
+   Url ::= TEXTUAL-CONVENTION
+       DISPLAY-HINT "255a"
+       STATUS       current
+       DESCRIPTION
+           "An octet string containing a URL like syntax."
+       SYNTAX       OCTET STRING (SIZE (0..255))
+
+   --
+   --
+   -- The urlTargetObjects group
+   --
+   --
+
+   urlTargetSpinLock OBJECT-TYPE
+       SYNTAX      TestAndIncr
+       MAX-ACCESS  read-write
+       STATUS      current
+       DESCRIPTION
+           "This object is used to facilitate modification of table
+            entries in the URL-TARGET-MIB module by multiple
+            managers.  In particular, it is useful when modifying
+            the value of the urlTargetTagList object.
+
+            The procedure for modifying the urlTargetTagList
+            object is as follows:
+
+                1.  Retrieve the value of urlTargetSpinLock and
+                    of urlTargetTagList.
+
+                2.  Generate a new value for urlTargetTagList.
+
+                3.  Set the value of urlTargetSpinLock to the
+                    retrieved value, and the value of
+                    urlTargetTagList to the new value.  If
+                    the set fails for the urlTargetSpinLock
+                    object, go back to step 1."
+       ::= { urlTargetObjects 1 }
+
+   urlTargetTable OBJECT-TYPE
+       SYNTAX      SEQUENCE OF UrlTargetEntry
+       MAX-ACCESS  not-accessible
+       STATUS      current
+       DESCRIPTION
+           "A table of URL references."
+       ::= { urlTargetObjects 2 }
+
+   urlTargetEntry OBJECT-TYPE
+       SYNTAX      UrlTargetEntry
+       MAX-ACCESS  not-accessible
+       STATUS      current
+       DESCRIPTION
+           "An SNMP URL address to be used in the generation
+            of SNMP operations.
+            Entries in the urlTargetTable are created and
+            deleted using the urlTargetRowStatus object."
+
+       INDEX { IMPLIED urlTargetIndex }
+       ::= { urlTargetTable 1 }
+
+   UrlTargetEntry ::= SEQUENCE {
+       urlTargetIndex        INTEGER,
+       urlTargetTagList      SnmpTagList,
+       urlTargetURL          Url,
+       urlTargetStorageType  StorageType,
+       urlTargetRowStatus    RowStatus
+   }
+
+   urlTargetIndex OBJECT-TYPE
+       SYNTAX      INTEGER
+       MAX-ACCESS  not-accessible
+       STATUS      current
+       DESCRIPTION
+           "The locally arbitrary, but unique identifier associated
+            with this urlTargetEntry."
+       ::= { urlTargetEntry 1 }
+
+   urlTargetTagList OBJECT-TYPE
+       SYNTAX      SnmpTagList
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "This object contains a list of tag values which are
+            used to select target addresses for a particular
+            operation."
+       DEFVAL { "" }
+       ::= { urlTargetEntry 2 }
+
+   urlTargetURL OBJECT-TYPE
+       SYNTAX      Url
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "This object indicates the SNMP URL."
+       ::= { urlTargetEntry 3 }
+
+   urlTargetStorageType OBJECT-TYPE
+       SYNTAX      StorageType
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "The storage type for this conceptual row."
+       DEFVAL { nonVolatile }
+       ::= { urlTargetEntry 4 }
+
+   urlTargetRowStatus OBJECT-TYPE
+       SYNTAX      RowStatus
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "The status of this conceptual row.
+            To create a row in this table, a manager must
+            set this object to either createAndGo(4) or
+            createAndWait(5).
+            Until instance of urlTargetURL is
+            appropriately configured, the value of the
+            corresponding instance of the urlTargetRowStatus
+            column is 'notReady'.
+
+            In particular, a newly created row cannot be made
+            active until the corresponding instance of urlTargetURL 
+            have been set.
+
+            All objects may be modified at any time."
+       ::= { urlTargetEntry 5 }
+
+   END

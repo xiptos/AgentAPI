@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project basedir="." default="compile" name="Agent API Classes">
+
+  <!-- =================== Environmental Properties ======================= -->
+
+  <property name="build.compiler" value="modern" />
+  <property name="src.dir" value="./src" />
+  <property name="etc.dir" value="./etc" />
+  <property name="bin.dir" value="./bin" />
+  <property name="mib.dir" value="./mibs" />
+
+  <property name="build.dir" value="./build" />
+  <property name="fulldist.dir" value="./dist" />
+  <property name="dist.dir" value="./dist/agentapi" />
+  <property name="lib.dir" value="./lib" />
+  <property name="web.dir" value="./web" />
+
+  <property file="${etc.dir}/agentapi.properties" />
+  <property file="${etc.dir}/agentapi.version" />
+
+
+
+  <property name="javadoc.windowtitle" value="Agent API Documentation" />
+  <property name="javadoc.doctitle" value="Agent API Documentation" />
+
+  <property name="jar.file" value="agentapi_${agentapi.version}.jar" />
+  <property name="dist.file" value="agentapi_dist_${agentapi.version}.jar" />
+
+
+
+  <!-- =================== Project Properties ======================= -->
+  <path id="project.class.path">
+    <pathelement path="${build.dir}/classes" />
+    <pathelement location="${bin.dir}/joesnmp-0.2.6.jar" />
+    <pathelement location="${bin.dir}/org.mortbay.jetty.jar" />
+    <pathelement location="${bin.dir}/javax.servlet.jar" />
+    <pathelement location="${bin.dir}/jax.jar" />
+    <pathelement location="${lib.dir}/${jar.file}" />
+  </path>
+
+  <!-- ======================== Compile grammar ========================== -->
+  <target description="Generates the parser files with JavaCC" name="javacc">
+    <echo message="JavaCC Home: ${javacc.home}" />
+    <javacc javacchome="${javacc.home}" static="false" target="${src.dir}/pt/ipb/marser/smi/SMIParser.jj" />
+  </target>
+
+  <!-- ======================== Compile Classes ========================== -->
+  <target depends="prepare,javacc" name="compile">
+    <echo message="compile entire source tree" />
+    <javac classpathref="project.class.path" debug="on" deprecation="on" destdir="${build.dir}/classes" optimize="on" srcdir="${src.dir}" />
+
+    <copy todir="${build.dir}/classes/pt/ipb/marser/gui/images">
+      <fileset dir="${src.dir}/pt/ipb/marser/gui/images" />
+    </copy>
+
+
+  </target>
+
+  <!-- ===================== Prepare Directories ========================= -->
+  <target name="prepare">
+    <!-- "Build" Hierarchy -->
+    <mkdir dir="${build.dir}" />
+    <mkdir dir="${build.dir}/classes" />
+    <mkdir dir="${build.dir}/docs" />
+    <mkdir dir="${build.dir}/docs/api" />
+
+    <!-- "Lib" Hierarchy -->
+    <mkdir dir="${lib.dir}" />
+
+    <!-- "Dist" Hierarchy -->
+    <mkdir dir="${dist.dir}" />
+    <mkdir dir="${dist.dir}/docs" />
+    <mkdir dir="${dist.dir}/docs/api" />
+    <mkdir dir="${dist.dir}/${lib.dir}" />
+    <mkdir dir="${dist.dir}/${src.dir}" />
+    <mkdir dir="${dist.dir}/${web.dir}" />
+
+  </target>
+
+  <!-- ========================= Creates the JAR ======================== -->
+  <target depends="compile" name="jar">
+    <jar basedir="${build.dir}/classes" jarfile="${lib.dir}/${jar.file}" />
+  </target>
+
+  <!-- ======================== Build JavaDoc =========================== -->
+  <target depends="prepare" name="javadoc">
+    <javadoc classpathref="project.class.path" bottom="Copyright (c) 2002-2003 Rui Pedro Lopes.  All Rights Reserved." destdir="${build.dir}/docs/api" doctitle="${javadoc.doctitle}" packagenames="pt.ipb.agentapi.*,org.opennms.protocols.*" sourcepath="${src.dir}" use="true" windowtitle="${javadoc.windowtitle}" />
+  </target>
+
+  <!-- ===================== Distribution Files ========================= -->
+  <target depends="compile,javadoc,jar" name="dist">
+
+    <copy todir="${dist.dir}/${src.dir}">
+      <fileset dir="${src.dir}" />
+    </copy>
+    <antcall target="replace_str" />
+    <copy todir="${dist.dir}/${bin.dir}">
+      <fileset dir="${bin.dir}" />
+    </copy>
+    <copy todir="${dist.dir}/${etc.dir}">
+      <fileset dir="${etc.dir}" />
+    </copy>
+    <copy todir="${dist.dir}/${web.dir}">
+      <fileset dir="${web.dir}" />
+    </copy>
+    <copy todir="${dist.dir}/${mib.dir}">
+      <fileset dir="${mib.dir}" />
+    </copy>
+
+    <copy file="build.xml" todir="${dist.dir}" />
+
+    <copy todir="${dist.dir}/docs/api">
+      <fileset dir="${build.dir}/docs/api" />
+    </copy>
+    <copy file="${lib.dir}/${jar.file}" todir="${dist.dir}/lib" />
+
+    <jar basedir="${fulldist.dir}" jarfile="${lib.dir}/${dist.file}" />
+  </target>
+
+  <!-- ====================== Clean Generated Files ===================== -->
+  <target name="clean">
+    <delete dir="${build.dir}" />
+    <delete dir="${fulldist.dir}" />
+    <delete dir="${lib.dir}" />
+  </target>
+
+  <!-- ========================= Replace test  ======================= -->
+  <target depends="replace_copyright,replace_license" name="replace_str" />
+
+  <target name="replace_copyright">
+    <replace dir="${dist.dir}/${src.dir}">
+      <include name="**/*.deprecated" />
+      <include name="**/*.pending" />
+      <include name="**/*.java" />
+      <include name="**/*.jj" />
+      <replacetoken>@copyright@</replacetoken>
+      <replacevalue>* Copyright (C) 2002-2004 Rui Pedro Lopes (rlopes at ipb dot pt)</replacevalue>
+    </replace>
+  </target>
+
+  <target name="replace_license">
+    <replace dir="${dist.dir}/${src.dir}">
+      <include name="**/*.deprecated" />
+      <include name="**/*.pending" />
+      <include name="**/*.java" />
+      <include name="**/*.jj" />
+      <replacetoken>@license@</replacetoken>
+      <replacevalue><![CDATA[*
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA  02111-1307, USA.
+ *]]></replacevalue>
+    </replace>
+
+  </target>
+
+  <!-- ========================= All In One Build ======================= -->
+  <target depends="clean,dist" name="all" />
+
+  <!-- ====================== Clean Generated Files ===================== -->
+  <target description="Deletes the files generated by JavaCC" name="cleancc">
+    <delete file="${src.dir}/pt/ipb/marser/smi/ParseException.java" />
+    <delete file="${src.dir}/pt/ipb/marser/smi/SimpleCharStream.java" />
+    <delete file="${src.dir}/pt/ipb/marser/smi/SMIParser.java" />
+    <delete file="${src.dir}/pt/ipb/marser/smi/SMIParserConstants.java" />
+    <delete file="${src.dir}/pt/ipb/marser/smi/SMIParserTokenManager.java" />
+    <delete file="${src.dir}/pt/ipb/marser/smi/Token.java" />
+    <delete file="${src.dir}/pt/ipb/marser/smi/TokenMgrError.java" />
+  </target>
+
+  <!-- ====================== Run Demo ===================== -->
+
+  <target name="run_demo" depends="jar">
+    <java classname="pt.ipb.agentapi.demo.TestAgent" dir="." fork="true">
+      <classpath refid="project.class.path" />
+      <sysproperty key="agentapi.engine" value="pt.ipb.agentapi.engine.snmp.JoeSnmpEngine,pt.ipb.agentapi.engine.http.HTTPEngine" />
+      <sysproperty key="agentapi.engine.config.file" value="etc/demo_agent.properties" />
+    </java>
+  </target>
+
+  <!-- ====================== Run Demo with AgentX ===================== -->
+  <target name="run_demo_agentx" depends="jar">
+    <java classname="pt.ipb.agentapi.demo.TestAgent" dir="." fork="true">
+      <classpath refid="project.class.path" />
+      <sysproperty key="agentapi.engine" value="pt.ipb.agentapi.engine.snmp.JoeSnmpEngine,pt.ipb.agentapi.engine.agentx.JAXEngine,pt.ipb.agentapi.engine.http.HTTPEngine" />
+      <sysproperty key="agentapi.engine.config.file" value="etc/demo_agent.properties" />
+    </java>
+  </target>
+
+  <!-- ==================== Check all files in ./mibs  ================== -->
+  <target name="run_mibs" depends="jar">
+    <java classname="pt.ipb.marser.demo.AllFiles" dir="." fork="true">
+      <classpath refid="project.class.path" />
+      <arg value="mibs" />
+    </java>
+  </target>
+
+  <!-- ==================== Run MibViewer  ================== -->
+  <target name="run_mib_viewer" depends="jar">
+    <java classname="pt.ipb.marser.gui.MibViewer" dir="." fork="true">
+      <classpath refid="project.class.path" />
+    </java>
+  </target>
+
+</project>

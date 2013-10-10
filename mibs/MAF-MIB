@@ -1,0 +1,792 @@
+MAF-MIB DEFINITIONS ::= BEGIN
+IMPORTS
+
+    enterprises
+        FROM SNMPv2-SMI
+    SnmpAdminString
+        FROM SNMP-FRAMEWORK-MIB
+    RowStatus
+        FROM SNMPv2-TC;
+
+ipb    MODULE-IDENTITY
+    LAST-UPDATED    "0009151526Z"
+    ORGANIZATION    "Instituto Politecnico de Braganca / Universidade de Aveiro"
+    CONTACT-INFO    "Rui Pedro Lopes
+ESTiG - IPB
+Campus St Apolonia
+5300 Braganca
+Portugal
+rlopes@ipb.pt
+
+Jose Luis Oliveira
+DET-UA
+Campus Universitario
+3810 Aveiro
+Portugal
+jlo@det.ua.pt"
+    DESCRIPTION
+        "MIB to monitor and control a Mobile Agent System using MAF"
+    REVISION    "0201150000z"
+    DESCRIPTION
+        "Changed mafLookup section to cope with several filters."
+  ::=  {  enterprises  12499  }
+
+mafMIB    OBJECT IDENTIFIER  ::=  {  ipb  1  }
+
+mafObjects    OBJECT IDENTIFIER  ::=  {  mafMIB  1  }
+mafLookup    OBJECT IDENTIFIER  ::=  {  mafMIB  2  }
+
+-----------------------------------------------------------
+-- System Identification Group
+-- information from MAFAgentSystem.get_agent_system_info()
+-- and from MAFFinder.lookup_agent_system();
+-----------------------------------------------------------
+mafSysId    OBJECT IDENTIFIER  ::=  {  mafObjects  1  }
+
+mafSysAuthority OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  mandatory
+              DESCRIPTION
+                      "identifies the person or organization for whom
+                       the agent system acts. For example, an agent system
+                       with authority Bob implements Bob's security policies
+                       in protecting Bob's resources."
+              DEFVAL  { ''H }
+              ::= { mafSysId 1 }
+
+mafSysIdentifier OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  mandatory
+              DESCRIPTION
+                      "Identifies this AgentSystem."
+              DEFVAL  { ''H }
+              ::= { mafSysId 2 }
+
+mafSysLocation OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  mandatory
+              DESCRIPTION
+                      "Address of this AgentSystem."
+              DEFVAL  { ''H }
+              ::= { mafSysId 3 }
+
+mafSysType OBJECT-TYPE
+              SYNTAX  INTEGER {
+                    nonAgentSystem(0),
+                    aglets(1),
+                    moa(2),
+                    agentTCL(3),
+                    grasshopper(5)
+                    }
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Type of this AgentSystem."
+              ::= { mafSysId 4 }
+
+mafSysDescr OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Description of this AgentSystem."
+              DEFVAL  { ''H }
+              ::= { mafSysId 5 }
+
+mafSysMajorVersion OBJECT-TYPE
+              SYNTAX  INTEGER
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Major version of this AgentSystem."
+              ::= { mafSysId 6 }
+
+mafSysMinorVersion OBJECT-TYPE
+              SYNTAX  INTEGER
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Minor version of this AgentSystem."
+              ::= { mafSysId 7 }
+
+----------------------------------------------------------
+-- Error table
+----------------------------------------------------------
+
+mafErrorTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF MamErrorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+     "A table of maf errors."
+    ::= { mafObjects 2 }
+
+mafErrorEntry OBJECT-TYPE
+    SYNTAX      MamErrorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+     "Information about errors in MAF operation."
+    INDEX       { mafErrorIndex }
+    ::= { mafErrorTable 1 }
+
+MamErrorEntry ::= SEQUENCE {
+  mafErrorIndex    INTEGER,
+  mafErrorCode     INTEGER
+}
+
+mafErrorIndex OBJECT-TYPE
+    SYNTAX      INTEGER
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION
+     "A unique value for every error."
+    ::= { mafErrorEntry 1 }
+
+mafErrorCode OBJECT-TYPE
+    SYNTAX      INTEGER {
+                  namingServiceNotFound(0),
+                  finderNotFound(1),
+                  classUnknown(2),
+                  argumentInvalid(3),
+                  deserializationFailed(4),
+                  mafExtendedException(5),
+                  agentNotFound(6),
+                  agentAlreadyRunning(7),
+                  agentAlreadySuspended(8),
+                  resumeFailed(9),
+                  suspendFailed(10),
+                  terminateFailed(11),
+                  genericError(12)
+                }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION
+     "A unique value for every error."
+    ::= { mafErrorEntry 2 }
+
+----------------------------------------------------------
+-- Language and Serialization Table
+-- information from MAFAgentSystem.get_agent_system_info()
+----------------------------------------------------------
+
+mafLanguageTable    OBJECT-TYPE
+    SYNTAX    SEQUENCE  OF  MamLanguageEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "List of supported languages."
+    ::=  { mafObjects  3 }
+
+mafLanguageEntry    OBJECT-TYPE
+    SYNTAX    MamLanguageEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "A Language Entry"
+    INDEX    {  mafLanguageIndex }
+    ::=  { mafLanguageTable 1 }
+
+MamLanguageEntry  ::=  SEQUENCE {
+    mafLanguageIndex  INTEGER,
+    mafLanguageType  INTEGER,
+    mafLanguageSerializationScheme  INTEGER
+    }
+mafLanguageIndex    OBJECT-TYPE 
+    SYNTAX    INTEGER 
+    MAX-ACCESS    not-accessible
+    STATUS    current
+ 
+    DESCRIPTION
+        "The Index of the AgentSystem language."
+    
+    ::=  {  mafLanguageEntry  1  }
+
+mafLanguageType OBJECT-TYPE
+        SYNTAX  INTEGER {
+              languageNotSpecified(0),
+              java(1),
+              tcl(2),
+              scheme(3),
+              perl(4)
+              }
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Type of supported language."
+              ::= { mafLanguageEntry 2 }
+
+mafLanguageSerializationScheme OBJECT-TYPE
+        SYNTAX  INTEGER {
+              serializationNotSpecified(0),
+              javaObjectSerialization(1)
+              }
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Serialization scheme of supported language."
+              ::= { mafLanguageEntry 3 }
+
+----------------------------------------------------------
+-- Place table
+-- information from MAFAgentSystem.list_all_places()
+----------------------------------------------------------
+
+mafPlaceTable    OBJECT-TYPE
+    SYNTAX    SEQUENCE  OF  MamPlaceEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "List of current agent system places."
+    ::=  { mafObjects  4 }
+
+mafPlaceEntry    OBJECT-TYPE
+    SYNTAX    MamPlaceEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "A Place Entry"
+    INDEX    {  mafPlaceIndex }
+    ::=  { mafPlaceTable 1 }
+
+MamPlaceEntry  ::=  SEQUENCE {
+    mafPlaceIndex  INTEGER,
+        mafPlaceLocation  DisplayString (SIZE (0..255))
+    }
+
+mafPlaceIndex    OBJECT-TYPE 
+    SYNTAX    INTEGER 
+    MAX-ACCESS    read-only
+    STATUS    current
+ 
+    DESCRIPTION
+        "The Index of the AgentSystem place."
+    
+    ::=  {  mafPlaceEntry  1  }
+
+mafPlaceLocation OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Location of the place."
+              ::= { mafPlaceEntry 2 }
+
+----------------------------------------------------------
+-- Agent table
+-- information from MAFAgentSystem.list_all_agents()
+----------------------------------------------------------
+
+mafAgentTable    OBJECT-TYPE
+    SYNTAX    SEQUENCE  OF  MamAgentEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "List of current agents ."
+    ::=  { mafObjects  5 }
+
+mafAgentEntry    OBJECT-TYPE
+    SYNTAX    MamAgentEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "A Agent Entry"
+    INDEX    {  mafAgentAuthority, mafAgentIdentity, mafASType }
+    ::=  { mafAgentTable 1 }
+
+MamAgentEntry  ::=  SEQUENCE {
+    mafAgentAuthority  DisplayString,
+    mafAgentIdentity  DisplayString,
+    mafASType  INTEGER,
+    mafAgentStatus  INTEGER,
+        mafAgentLocation  DisplayString (SIZE (0..255))
+    }
+
+mafAgentAuthority    OBJECT-TYPE 
+    SYNTAX    DisplayString 
+    MAX-ACCESS    not-accessible
+    STATUS    current
+ 
+    DESCRIPTION
+        "The Authority of the agent."
+    
+    ::=  {  mafAgentEntry  1  }
+
+mafAgentIdentity    OBJECT-TYPE 
+    SYNTAX    DisplayString 
+    MAX-ACCESS    not-accessible
+    STATUS    current
+ 
+    DESCRIPTION
+        "The Identity of the agent."
+    
+    ::=  {  mafAgentEntry  2  }
+
+mafASType    OBJECT-TYPE 
+              SYNTAX  INTEGER {
+                    nonAgentSystem(0),
+                    aglets(1),
+                    moa(2),
+                    agentTCL(3),
+                    grasshopper(5)
+                    }
+    MAX-ACCESS    not-accessible
+    STATUS    current
+ 
+    DESCRIPTION
+        "The type of the agent system."
+    
+    ::=  {  mafAgentEntry  3  }
+
+mafAgentStatus    OBJECT-TYPE 
+              SYNTAX  INTEGER {
+                    running(0),
+                    suspended(1),
+                    terminated(2)
+                    }
+    MAX-ACCESS    read-only
+    STATUS    current
+ 
+    DESCRIPTION
+        "The status of the agent."
+    
+    ::=  {  mafAgentEntry  4  }
+
+mafAgentLocation OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Location of the agent."
+              ::= { mafAgentEntry 5 }
+
+mafAgentRequiredStatus OBJECT-TYPE
+              SYNTAX  INTEGER {
+                    suspend(1),
+                    resume(2),
+                    terminate(3)
+                    }
+              ACCESS  write-only
+              STATUS  current
+              DESCRIPTION
+                      "Required status of this agent."
+              ::= { mafAgentEntry 6 }
+
+-----------------------------------------------------------
+-- Agent Creation Group
+-----------------------------------------------------------
+mafCreateAgent    OBJECT IDENTIFIER  ::=  {  mafObjects  6  }
+
+mafCreateAgentAuthority OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-write
+              STATUS  current
+              DESCRIPTION
+                      "The authority of the agent to be created.
+                       Ignored if the user does not have naming responsibility."
+              DEFVAL  { ''H }
+              ::= { mafCreateAgent 1 }
+
+mafCreateAgentIdentity OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-write
+              STATUS  current
+              DESCRIPTION
+                      "The identity of the agent to be created.
+                       Ignored if the user does not have naming responsibility."
+              DEFVAL  { ''H }
+              ::= { mafCreateAgent 2 }
+
+mafCreateAgentClassName OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-write
+              STATUS  current
+              DESCRIPTION
+                      "The name of the class necessary to instantiate
+                       the agent."
+              DEFVAL  { ''H }
+              ::= { mafCreateAgent 3 }
+
+mafCreateAgentCodeBase OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-write
+              STATUS  current
+              DESCRIPTION
+                      "The code base from where the classes will
+                       be loaded."
+              DEFVAL  { ''H }
+              ::= { mafCreateAgent 4 }
+
+mafCreateAgentPlaceName OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-write
+              STATUS  current
+              DESCRIPTION
+                      "The name of the place where the agent
+                       will be created."
+              DEFVAL  { ''H }
+              ::= { mafCreateAgent 5 }
+
+mafCreateAgentArguments OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-write
+              STATUS  current
+              DESCRIPTION
+                      "The arguments provided to the agent constructor."
+              DEFVAL  { ''H }
+              ::= { mafCreateAgent 6 }
+
+mafCreateAgentGo OBJECT-TYPE
+              SYNTAX  INTEGER {
+                    waiting(0),
+                    create(1)
+                    }
+              ACCESS  read-write
+              STATUS  current
+              DESCRIPTION
+                      "Used to create the agent."
+              DEFVAL { 0 }
+              ::= { mafCreateAgent 7 }
+
+----------------------------------------------------------
+-- Lookup group
+-- information from MAFFinder interface
+----------------------------------------------------------
+
+----------------------------------------------------------
+-- Filter table which fills the results tables
+----------------------------------------------------------
+
+mafFilterTable OBJECT-TYPE
+    SYNTAX  SEQUENCE OF MamFilterEntry
+    ACCESS  not-accessible
+    STATUS  current
+    DESCRIPTION
+        "This table defines filters to lookup for
+         Places, Agents and AgentSystems."
+    ::= { mafLookup 1 }
+
+   mafFilterEntry OBJECT-TYPE
+       SYNTAX  MamFilterEntry
+       ACCESS  not-accessible
+       STATUS  current
+       DESCRIPTION
+           "An entry describing a particular search filter.
+
+            Unless noted otherwise, writable objects of this row
+            can be modified independent of the current value of
+            mafFilterRowStatus, mafFilterAdminStatus and mafFilterOperStatus."
+       INDEX { mafFilterOwner, mafFilterName }
+       ::= { mafFilterTable 1 }
+
+   MamFilterEntry ::= SEQUENCE {
+       mafFilterOwner          SnmpAdminString,
+       mafFilterName           SnmpAdminString,
+       mafFilterDescr          SnmpAdminString,
+       mafFilter               SnmpAdminString,
+       mafFilterSearchFor      BITS,
+       mafFilterAdminStatus    INTEGER,
+       mafFilterOperStatus     INTEGER,
+       mafFilterErrors         Counter32,
+       mafFilterRowStatus      RowStatus
+   }
+
+   mafFilterOwner OBJECT-TYPE
+       SYNTAX      SnmpAdminString (SIZE(0..32))
+       MAX-ACCESS  not-accessible
+       STATUS      current
+       DESCRIPTION
+           "The owner of this filtering entry. The exact semantics of
+            this string are subject to the security policy defined by
+            the security administrator."
+       ::= { mafFilterEntry 1 }
+
+   mafFilterName OBJECT-TYPE
+       SYNTAX      SnmpAdminString (SIZE(1..32))
+       MAX-ACCESS  not-accessible
+       STATUS      current
+       DESCRIPTION
+           "The locally-unique, administratively assigned name for this
+            filtering entry. This object allows a mafFilterOwner to have
+            multiple entries in the mafFilterTable."
+       ::= { mafFilterEntry 2 }
+
+   mafFilterDescr OBJECT-TYPE
+       SYNTAX      SnmpAdminString
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "The human readable description of the purpose of this
+            filtering entry."
+       DEFVAL { ''H }
+       ::= { mafFilterEntry 3 }
+
+   mafFilter OBJECT-TYPE
+       SYNTAX      SnmpAdminString
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "The filter string to be used in the search."
+       ::= { mafFilterEntry 4 }
+
+   mafFilterSearchFor OBJECT-TYPE
+       SYNTAX      BITS {
+                       agents(0),
+                       agentSystems(1),
+                       places(2)
+                   }
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "The type of objects this filtering entry should look for.
+            Setting multiple bits will include several searches
+            keeping results on separate tables."
+       DEFVAL { {} }
+       ::= { mafFilterEntry 5 }
+
+   mafFilterAdminStatus OBJECT-TYPE
+       SYNTAX      INTEGER {
+                       searching(1),
+                       stopped(2)
+                   }
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "The desired state of the filter."
+       DEFVAL { stopped }
+       ::= { mafFilterEntry 6 }
+
+   mafFilterOperStatus OBJECT-TYPE
+       SYNTAX      INTEGER {
+                       searching(1),
+                       stopped(2),
+                       finished(3)
+                   }
+       MAX-ACCESS  read-only
+       STATUS      current
+       DESCRIPTION
+           "The current operational state of this filter. The state
+            searching(1) indicates this entry is active and that the
+            agent is searching. The stopped(2) state indicates that
+            this entry is currently inactive. The finished(3)
+            state indicates that the search is over and the results
+            are available on the correspondent tables."
+       ::= { mafFilterEntry 7 }
+
+   mafFilterErrors OBJECT-TYPE
+      SYNTAX      Counter32
+      MAX-ACCESS  read-only
+      STATUS      current
+      DESCRIPTION
+       "The number of errors encountered while performing this
+       search."
+      ::= { mafFilterEntry 8 }
+
+   mafFilterRowStatus OBJECT-TYPE
+       SYNTAX      RowStatus
+       MAX-ACCESS  read-create
+       STATUS      current
+       DESCRIPTION
+           "The status of this filter. A control that allows
+            entries to be added and removed from this table.
+
+            Unless noted otherwise, writable objects of this row
+            can be modified independent of the current value of
+            mafFilterRowStatus, mafFilterAdminStatus and mafFilterOperStatus.
+            In particular, it is legal to modify mafFilter
+            and mafFilterSearchFor when
+            mafFilterRowStatus is active and mafFilterAdminStatus and
+            mafFilterOperStatus are both 'searching'.
+
+            The miminum number of objects that need to be set during
+            row creation before a row can be set to `active' are
+            mafFilter and mafFilterSearchFor."
+       ::= { mafFilterEntry 9 }
+
+----------------------------------------------------------
+-- Search error table
+----------------------------------------------------------
+
+mafFilterErrorTable OBJECT-TYPE
+    SYNTAX      SEQUENCE OF MamFilterErrorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+     "A table of errors occurred during search operations."
+    ::= { mafLookup 2 }
+
+mafFilterErrorEntry OBJECT-TYPE
+    SYNTAX      MamFilterErrorEntry
+    MAX-ACCESS  not-accessible
+    STATUS      current
+    DESCRIPTION
+     "Information about errors in MAF operation."
+    INDEX       { mafFilterOwner, mafFilterName }
+    ::= { mafFilterErrorTable 1 }
+
+MamFilterErrorEntry ::= SEQUENCE {
+  mafFilterErrorIndex    Integer32,
+  mafFilterErrorCode     INTEGER
+}
+
+mafFilterErrorIndex OBJECT-TYPE
+   SYNTAX  Integer32
+   ACCESS  read-only
+   STATUS  current
+   DESCRIPTION
+      "The one-dimensioned character array index into mafFilter
+       for where the error occurred. The value zero indicates
+       irrelevance."
+   ::= { mafFilterErrorEntry 1 }
+
+mafFilterErrorCode OBJECT-TYPE
+    SYNTAX      INTEGER {
+                  namingServiceNotFound(0),
+                  finderNotFound(1),
+                  argumentInvalid(2),
+                  mafExtendedException(3),
+                  genericError(4)
+                }
+    ACCESS      read-only
+    STATUS      current
+    DESCRIPTION
+     "A unique value for every error."
+    ::= { mafFilterErrorEntry 2 }
+
+----------------------------------------------------------
+-- Agents results table
+----------------------------------------------------------
+
+mafLocAgentTable    OBJECT-TYPE
+    SYNTAX    SEQUENCE  OF  MamLocAgentEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "List of found agents."
+    ::=  { mafLookup  3 }
+
+mafLocAgentEntry    OBJECT-TYPE
+    SYNTAX    MamLocAgentEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "A Agent Entry"
+    INDEX    { mafFilterOwner, mafFilterName, mafLocAgentIndex }
+    ::=  { mafLocAgentTable 1 }
+
+MamLocAgentEntry  ::=  SEQUENCE {
+    mafLocAgentIndex  Unsigned32 (1..4294967295),
+    mafLocAgentLocation  DisplayString (SIZE (0..255))
+}
+
+mafLocAgentIndex    OBJECT-TYPE 
+    SYNTAX    Unsigned32 (1..4294967295) 
+    MAX-ACCESS    not-accessible
+    STATUS    current
+ 
+    DESCRIPTION
+        "The Index of the AgentSystem place."
+    
+    ::=  {  mafLocAgentEntry  1  }
+
+mafLocAgentLocation OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Location of the place."
+              ::= { mafLocAgentEntry 2 }
+
+----------------------------------------------------------
+-- Agent System results table
+----------------------------------------------------------
+
+mafLocASTable    OBJECT-TYPE
+    SYNTAX    SEQUENCE  OF  MamLocASEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "List of found agent system places."
+    ::=  { mafLookup 4 }
+
+mafLocASEntry    OBJECT-TYPE
+    SYNTAX    MamLocASEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "An AS Entry"
+    INDEX    { mafFilterOwner, mafFilterName, mafLocASIndex }
+    ::=  { mafLocASTable 1 }
+
+MamLocASEntry  ::=  SEQUENCE {
+    mafLocASIndex  Unsigned32,
+    mafLocASLocation  DisplayString (SIZE (0..255))
+}
+
+mafLocASIndex    OBJECT-TYPE 
+    SYNTAX    Unsigned32 (1..4294967295) 
+    MAX-ACCESS    not-accessible
+    STATUS    current
+ 
+    DESCRIPTION
+        "The Index of the AgentSystem place."
+    
+    ::=  {  mafLocASEntry  1  }
+
+mafLocASLocation OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Location of the place."
+              ::= { mafLocASEntry 2 }
+
+----------------------------------------------------------
+-- Places result table
+----------------------------------------------------------
+
+mafLocPlaceTable    OBJECT-TYPE
+    SYNTAX    SEQUENCE  OF  MamLocPlaceEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "List of found agent system places."
+    ::=  { mafLookup 5 }
+
+mafLocPlaceEntry    OBJECT-TYPE
+    SYNTAX    MamLocPlaceEntry
+    MAX-ACCESS    not-accessible
+    STATUS    current
+     DESCRIPTION
+        "A Place Entry"
+    INDEX    {  mafFilterOwner, mafFilterName, mafLocPlaceIndex }
+    ::=  { mafLocPlaceTable 1 }
+
+MamLocPlaceEntry  ::=  SEQUENCE {
+    mafLocPlaceIndex  Unsigned32,
+    mafLocPlaceLocation  DisplayString (SIZE (0..255))
+    }
+
+mafLocPlaceIndex    OBJECT-TYPE 
+    SYNTAX      Unsigned32 (1..4294967295) 
+    MAX-ACCESS  not-accessible
+    STATUS      current
+ 
+    DESCRIPTION
+        "The Index of the AgentSystem place."
+    
+    ::=  {  mafLocPlaceEntry  1  }
+
+mafLocPlaceLocation OBJECT-TYPE
+              SYNTAX  DisplayString (SIZE (0..255))
+              ACCESS  read-only
+              STATUS  current
+              DESCRIPTION
+                      "Location of the place."
+              ::= { mafLocPlaceEntry 2 }
+
+
+END

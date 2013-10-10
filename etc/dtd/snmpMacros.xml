@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<snmp xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="snmpMacros.xsd"
+      version="3" user="senior" authProtocol="MD5" authPassword="senior" privPassword="senior">
+
+  <mib name="DISMAN-SCHEDULE-MIB" location="file:/home/rlopes/PhD/mibs/DISMAN-SCHEDULE-MIB"/>
+
+  <property name="anObject" value=".1.3.6.1.2.4.5.6"/>
+  <property name="anAddress" value="192.168.0.1"/>
+
+  <task name="propTest">
+    <get destination="$anAddress" name="sysUpTime" oid=".1.3.6.1.2.1.1.3.0"/>
+    <getNext destination="$anAddress" name="sysUpTime" oid=".1.3.6.1.2.1.1.3.0"/>
+    <set destination="$anotherAddress" name="sysUpTime" oid="$anObject" value="10"/>
+  </task>
+
+  <task name="empty">
+  </task>
+
+  <task name="runTaskTest">
+    <get destination="1" name="sysUpTime" oid=".1.3.6.1.2.1.1.3.0"/>
+    <getNext destination="2" name="sysUpTime" oid=".1.3.6.1.2.1.1.3.0"/>
+    <set destination="3" name="sysUpTime" oid="$anObject" value="10"/>
+    <runTask name="empty" document="file:/home/rlopes/PhD/Apps/agentapi/agentapi/etc/snmpMacros.xml"/>
+    <runTask name="propTest" document="file:/home/rlopes/PhD/Apps/agentapi/agentapi/etc/snmpMacros.xml"/>
+<!--
+    <runTask name="ensaio" document="file:/home/rlopes/PhD/Apps/agentapi/agentapi/etc/teste.xml"/>
+    <runTask name="nonExistentTask" document="file:/home/rlopes/PhD/Apps/agentapi/agentapi/etc/teste.xml"/>
+    <runTask name="nonExistentTask" document="file:/home/rlopes/PhD/Apps/agentapi/agentapi/etc/nonExistentFile.xml"/>
+-->
+  </task>
+</snmp>

@@ -1,0 +1,2255 @@
+/*
+ * $Id: SMIParser.jj 16 2004-08-11 10:14:58Z rlopes $
+* Copyright (C) 2002-2004 Rui Pedro Lopes (rlopes at ipb dot pt)
+*
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA  02111-1307, USA.
+ *
+ */
+
+options {
+LOOKAHEAD=1;
+SANITY_CHECK=true;
+DEBUG_PARSER=false;
+DEBUG_TOKEN_MANAGER=false;
+USER_TOKEN_MANAGER=false;
+USER_CHAR_STREAM=false;
+}
+
+PARSER_BEGIN(SMIParser)
+
+package pt.ipb.marser.smi;
+
+import java.util.*;
+import pt.ipb.snmp.SnmpConstants;
+import pt.ipb.marser.*;
+import java.io.File;
+
+public class SMIParser {
+  java.util.Vector vector = new java.util.Vector();
+  java.util.ArrayList rootList = new java.util.ArrayList();
+
+  String[] path;
+  String fileName;
+  String dir;
+
+  public SMIParser(String fileName) throws java.io.FileNotFoundException {
+    this(fileName, null);
+  }
+
+  public SMIParser(String fileName, String[] path) throws java.io.FileNotFoundException {
+    this(new java.io.FileInputStream(fileName));
+
+    this.path = path;
+    File file = new File(fileName);
+    this.fileName = file.getName();
+    this.dir = file.getParent();
+  }
+
+  public java.util.Vector getMibModules() {
+    return vector;
+  }
+
+  public MibModule getFirstMibModule() {
+    if(vector.size()>0) {
+      return (MibModule)vector.firstElement();
+    }
+    return null;
+  }
+
+  void connect(MibNode node, ArrayList list, int level, MibModule module) throws NumberFormatException, IllegalArgumentException {
+    if(level==0) {
+      return;
+    }
+
+    MibNode existingNode = module.getNode(node.getLabel());
+    // A node with the same name already exists. We have to change it.
+    if(existingNode!=null) {
+      node = existingNode;
+    }
+
+    // Update the subid number to match. example: sysUpTimeInstance ::= { sysUpTime 0 }
+    // the subid of sysUpTimeInstance will be '0'
+    Object oid = list.get(level);
+    // If oid is a number (1)
+    if(oid instanceof String) {
+      node.setSubId(Integer.parseInt((String)oid));
+    // If oid is a name (dismanEventMIB) of a named number (internet(1))
+    } else if(oid instanceof NamedNumber) {
+      if(((NamedNumber)oid).getNumber()!=null)
+        node.setSubId(((NamedNumber)oid).getInt());
+    }
+
+    // Retrieve the parent name. example: sysUpTimeInstance ::= { sysUpTime 0 }
+    // the parent will be sysUpTime
+    // If the parent also has a number like org(3), retrieve it.
+    String parentName = null;
+    int parentNumber = -1;
+    Object parentOid = list.get(level-1);
+    if(parentOid instanceof NamedNumber) {
+      // If oid is a name (dismanEventMIB) of a named number (internet(1))
+      parentName = ((NamedNumber)parentOid).getName();
+      if("iso".equals(parentName)) {
+        parentNumber = 1;
+      } else {
+        if(((NamedNumber)parentOid).getNumber()!=null)
+          parentNumber = ((NamedNumber)parentOid).getInt();
+      }
+    } else if(parentOid instanceof String) {
+      StringBuffer str = new StringBuffer();
+      str.append("id-");
+      for(int i=0; i<(level-1); i++) {
+        String s = list.get(i).toString();
+        str.append(s);
+      }
+      parentName = str.toString();
+    }
+
+    // The SMI is incorrect: it does not define the parent of the current node
+    if(parentName==null) {
+      throw new IllegalArgumentException(node.getLabel()+" without a parent.");
+    }
+
+    // Look for the eventual parent MibNode
+    MibNode parent = module.getNode(parentName);
+
+    if(parent==null) {
+      parent = searchRoots(parentName);
+      if(parent==null) {
+        // It does not exist. Lookup imports
+        parent = copyFromImports(module, parentName);
+        if(parent==null) {
+          // It does not exit. Create one
+          parent = new MibNode(parentName, parentNumber);
+        }
+      }
+    }
+
+    // If the list of subOids continues, connect the other MibNodes
+    connect(parent, list, level-1, module);
+    parent.add(node);
+
+    if(module.getRoot()==null)
+      module.setRoot(parent);
+
+    MibNode ancestor = parent.getAncestorMatching(module.getRoot());
+    if(ancestor==null)
+      ancestor = getAncestorMatching(parent);
+
+    if(ancestor!=null) {
+      module.setRoot(ancestor);
+    } else {
+      addRoot(parent);
+    }
+
+//System.out.println(node.toTagString()+"----- number of roots: "+rootList.size());
+  }
+
+  void rebuildAugmentsIndexes(ObjectType obj, MibModule module) {
+    if(obj.augments()) {
+      Vector augmentedIndexes = new Vector();
+      for(Enumeration e=obj.indexes(); e.hasMoreElements(); ) {
+        String augmentedEntry = (String)e.nextElement();
+        // Look for the augmented entry MibNode
+        MibNode entry = module.getNode(augmentedEntry);
+
+        if(entry==null) {
+          entry = searchRoots(augmentedEntry);
+        }
+        if(entry==null) {
+          // It does not exist. Lookup imports
+          entry = module.lookupImports(augmentedEntry);
+          //entry = copyFromImports(module, augmentedEntry);
+        }
+        if(entry!=null) {
+          // Copy the indexes to the augments entry
+          for(Enumeration ae=((ObjectType)entry).indexes(); ae.hasMoreElements(); ) {
+            String as = (String)ae.nextElement();
+            augmentedIndexes.addElement(as);
+          }
+        }
+      }
+      obj.setIndexes(augmentedIndexes);
+    }
+  }
+
+  MibNode getRoot() {
+    if(rootList.isEmpty()) {
+      return null;
+    }
+    return (MibNode)rootList.get(0);
+  }
+
+  void addRoot(MibNode root) {
+    this.rootList.add(root);
+  }
+
+  MibNode searchRoots(String name) {
+    for(Iterator i=rootList.iterator(); i.hasNext(); ) {
+      MibNode root = (MibNode)i.next();
+      try {
+        // the first occurence in the existing tree.
+        for(Enumeration e = root.getRoot().breadthFirstEnumeration(); e.hasMoreElements(); ) {
+          MibNode node = (MibNode)e.nextElement();
+          if(name.equals(node.getLabel())) {
+            return node;
+          }
+        }
+      } catch(Exception e) {
+        //e.printStackTrace();
+      }
+    }
+    return null;
+  }
+
+  MibNode getAncestorMatching(MibNode node) {
+    for(Iterator i=rootList.iterator(); i.hasNext(); ) {
+      MibNode mn1 = (MibNode)i.next();
+      while(mn1!=null) {
+        MibNode mn2 = node;
+        while(mn2!=null) {
+          if(mn1.getLabel().equals(mn2.getLabel())) {
+            rootList.remove(mn1);
+            return mn1;
+          }
+          mn2 = mn2.getParent();
+        }
+        mn1=mn1.getParent();
+      }
+    }
+    return null;
+  }
+
+  MibNode copyFromImports(MibModule module, String parentName) {
+    // Scanning imported modules' nodes until finding the parent node
+    MibNode parent = module.lookupImports(parentName);
+
+    // It does not exist in all the imports. We will have to create a new.
+    if(parent==null) {
+      parent = null;
+
+    } else {
+      // It exists in imports. Clone the hole path and add it to this module
+      parent = (MibNode)parent.clonePath();
+      // Search for a connection point:
+      // where nodes from this module and from the parent path have the same name
+      MibNode mn1 = parent;
+      while(mn1!=null) {
+        MibNode thisModuleNode = module.getNode(mn1.getLabel());
+        if(thisModuleNode!=null) {
+          // ok. it was found. Transfer all the children to the found node
+          for(Enumeration e=mn1.children(); e.hasMoreElements(); ) {
+            MibNode child = (MibNode)e.nextElement();
+            thisModuleNode.add(child);
+          }
+          // Now it exists in this module
+          parent = module.getNode(parentName);
+          break;
+        }
+        mn1 = mn1.getParent();
+      }
+    }
+    return parent;
+  }
+
+  public static java.util.Vector parse(String fileName) throws java.io.FileNotFoundException, MibException {
+    SMIParser parser;
+    if(fileName!=null) {
+      try {
+        parser = new SMIParser(fileName);
+      } catch(Exception e) {
+        //e.printStackTrace();
+        throw new MibException("error: " + e.getMessage(), fileName);
+      }
+    } else {
+      parser = new SMIParser(System.in);
+    }
+    try {
+      System.out.println("Parsing file...");
+      parser.parse();
+      System.out.println("Done!");
+    } catch(Exception e) {
+      //e.printStackTrace();
+      throw new MibException("error: " + e.getMessage(), fileName);
+    }
+    return parser.getMibModules();
+  }
+
+  public static void main(String args[]) {
+    try {
+      if(args.length==1) {
+        parse(args[0]);
+      } else {
+        parse(null);
+      }
+    } catch(Exception e) {
+      e.printStackTrace();
+    }
+  }
+
+  String toDecimalString(String s) {
+    if(s!=null && s.toLowerCase().endsWith("h")) {
+      s = s.substring(1, s.length()-2);
+      s = Long.getLong(s, 16).toString();
+    }
+    return s;
+  }
+
+}
+
+class NamedNumber {
+  
+  String name;
+  String number;
+  
+  public NamedNumber(String name, String number) {
+    this.name = name;
+    this.number = number;
+  }
+  
+  public String getName() {
+    return name;
+  }
+  
+  public String getNumber() {
+    return number;
+  }
+  
+  public int getInt() throws NumberFormatException {
+    return Integer.parseInt(number);
+  }
+  
+  public String toString() {
+    StringBuffer str = new StringBuffer();
+    str.append(name);
+    if(number!=null) {
+      str.append("(");
+      str.append(number);
+      str.append(")");
+    }
+    return str.toString();
+  }
+  
+}
+
+PARSER_END(SMIParser)
+
+SKIP :
+{
+  " "
+| "\t"
+| "\n"
+| "\r"
+}
+
+SPECIAL_TOKEN :
+{
+  "--" : WithinASNComment
+}
+
+<WithinASNComment> SPECIAL_TOKEN :
+{
+  <("--" | "\n" | "\r" | "\r\n" )> : DEFAULT
+}
+
+<WithinASNComment> MORE :
+{
+  <~[]>
+}
+
+TOKEN : 
+{
+ <OBJECT_IDENTIFIER_TKN: "OBJECT" ([" ","\n","\t","\r"])? "IDENTIFIER">
+}
+
+TOKEN : 
+{
+ <OCTET_STRING_TKN: "OCTET" ([" ","\n","\t","\r"])? "STRING">
+}
+
+TOKEN : 
+{
+ <BSTRING_TKN: "\'" (["0"-"1"])* "\'" ["B","b"]>
+}
+
+TOKEN : 
+{
+ <HSTRING_TKN: "\'" (["0"-"9","A"-"F","a"-"f"])* "\'" ["H","h"]>
+}
+
+TOKEN : 
+{
+ <CSTRING_TKN: "\"" ( ~["\""] )* "\"" >
+}
+
+TOKEN : 
+{
+ <NUMBER_ERANGE_TKN: ["1"-"9"](["0"-"9"])*>
+}
+
+TOKEN : 
+{
+ <NUMBER_TKN: "0">
+}
+
+TOKEN :
+{
+  <DOT_TKN: ".">
+| <COMMA_TKN: ",">
+| <LEFTBRACE_TKN: "{">
+| <RIGHTBRACE_TKN: "}">
+| <LEFTPAREN_TKN: "(">
+| <RIGHTPAREN_TKN: ")">
+| <LEFTBRACKET_TKN: "[">
+| <RIGHTBRACKET_TKN: "]">
+| <LESSTHAN_TKN: "<">
+| <MINUS_TKN: "-">
+| <GETS_TKN: "::=">
+| <BAR_TKN: "|">
+| <SEMI_COLON_TKN: ";">
+| <SELECTOR_TKN: ":">
+
+| <INTEGER32_TKN: "Integer32">
+| <INTEGER_TKN: "INTEGER">
+| <BITS_TKN: "BITS">
+| <IPADDRESS_TKN: "IpAddress">
+| <COUNTER32_TKN: "Counter32">
+| <GAUGE32_TKN: "Gauge32">
+| <TIMETICKS_TKN: "TimeTicks">
+| <OPAQUE_TKN: "Opaque">
+| <COUNTER64_TKN: "Counter64">
+| <UNSIGNED32_TKN: "Unsigned32">
+| <SEQUENCE_TKN: "SEQUENCE">
+| <OF_TKN: "OF">
+| <SIZE_TKN: "SIZE">
+
+| <BEGIN_TKN: "BEGIN">
+| <END_TKN: "END">
+
+| <DEFINITIONS_TKN: "DEFINITIONS">
+| <IMPORTS_TKN: "IMPORTS">
+| <FROM_TKN: "FROM">
+| <EXPORTS_TKN: "EXPORTS">
+
+| <OBJECT_TYPE_TKN: "OBJECT-TYPE">
+| <SYNTAX_TKN: "SYNTAX">
+| <STATUS_TKN: "STATUS">
+| <DESCRIPTION_TKN: "DESCRIPTION">
+| <REFERENCE_TKN: "REFERENCE">
+| <INDEX_TKN: "INDEX">
+| <DEFVAL_TKN: "DEFVAL">
+| <DHINT_TKN: "DISPLAY-HINT">
+| <IMPLIED_TKN: "IMPLIED">
+
+// SMIv2-TC
+| <TC_TKN: "TEXTUAL-CONVENTION"> 
+| <MODULE_TKN: "MODULE">
+| <MANDATORY_GROUPS_TKN: "MANDATORY-GROUPS">
+| <GROUP_TKN: "GROUP">
+| <OBJECT_TKN: "OBJECT">
+| <WRITE_SYNTAX_TKN: "WRITE-SYNTAX">
+| <OBJECTS_TKN: "OBJECTS">
+| <AUGMENTS_TKN: "AUGMENTS">
+
+// SMIv2
+| <MODULE_IDENTITY_TKN: "MODULE-IDENTITY">
+| <LAST_UPDATED_TKN: "LAST-UPDATED">
+| <ORGANIZATION_TKN: "ORGANIZATION">
+| <CONTACT_INFO_TKN: "CONTACT-INFO">
+| <REVISION_TKN: "REVISION">
+| <NOTIFICATION_TYPE_TKN: "NOTIFICATION-TYPE">
+| <OBJECT_IDENTITY_TKN: "OBJECT-IDENTITY">
+| <MAX_ACCESS_TKN: "MAX-ACCESS">
+| <MIN_ACCESS_TKN: "MIN-ACCESS">
+| <UNITS_TKN: "UNITS">
+
+// SMIv1
+| <TRAP_TYPE_TKN: "TRAP-TYPE">
+| <ENTERPRISE_TKN: "ENTERPRISE"> 
+| <VARIABLES_TKN: "VARIABLES"> 
+| <ACCESS_TKN: "ACCESS">
+| <CHOICE_TKN: "CHOICE">
+| <IMPLICIT_TKN: "IMPLICIT">
+| <APPLICATION_TKN: "APPLICATION">
+
+// SMIv2-CONF
+| <OBJECT_GROUP_TKN: "OBJECT-GROUP"> 
+| <NOTIFICATION_GROUP_TKN: "NOTIFICATION-GROUP"> 
+| <NOTIFICATIONS_TKN: "NOTIFICATIONS"> 
+| <MODULE_COMPLIANCE_TKN: "MODULE-COMPLIANCE"> 
+| <AGENT_CAPABILITIES_TKN: "AGENT-CAPABILITIES"> 
+
+// Others
+| <MACRO_TKN: "MACRO">
+}
+
+TOKEN : 
+{
+ <LCASEFIRST_IDENT_TKN: ["a"-"z"] (("-"["a"-"z","A"-"Z","0"-"9"])|["a"-"z","A"-"Z","0"-"9"])*>
+}
+
+
+TOKEN : 
+{
+ <UCASEFIRST_IDENT_TKN: ["A"-"Z"](("-"["a"-"z","A"-"Z","0"-"9"])|["a"-"z","A"-"Z","0"-"9"])*>
+}
+
+void parse() throws MibException, java.io.FileNotFoundException  :
+{
+  MibModule module;
+} 
+{ 
+  ( module=moduleDefinition() { vector.addElement(module); } )*
+}
+
+/**
+ * DISMAN-EXPRESSION-MIB DEFINITIONS ::= BEGIN
+ *   moduleBody()
+ * END
+ */
+MibModule moduleDefinition() throws java.io.FileNotFoundException, MibException : 
+{
+  String moduleName;
+  MibModule module;
+}
+{ 
+  moduleName=moduleReference() { module=new MibModule(dir+java.io.File.separator+fileName, path); module.setName(moduleName); } <DEFINITIONS_TKN> <GETS_TKN> <BEGIN_TKN> moduleBody(module) <END_TKN>
+  {
+    module.setName(moduleName);
+    return module;
+  }
+}
+
+/**
+ * DISMAN-EXPRESSION-MIB
+ */
+String moduleReference() : 
+{
+  Token x;
+} 
+{ 
+  x=<UCASEFIRST_IDENT_TKN> 
+  {
+    return x.image;
+  }
+}
+
+/////////////////////////////////////////////////////////
+// Body
+/////////////////////////////////////////////////////////
+
+/**
+ * imports()
+ * assignmentList()
+ */
+void moduleBody(MibModule module) throws java.io.FileNotFoundException, MibException :
+{
+  MibImports importsObject = null;
+} 
+{ 
+  [ exports(module) ]
+  [ importsObject=imports(module.getPath()) { module.setImports(importsObject); } ]
+  [ assignmentList(module) ]
+}
+
+/////////////////////////////////////////////////////////
+// Exports
+/////////////////////////////////////////////////////////
+
+/**
+ * EXPORTS
+ *   symbolsExported();
+ */
+void exports(MibModule module) throws java.io.FileNotFoundException, MibException :
+{
+  ArrayList list = null;
+} 
+{ 
+  <EXPORTS_TKN> [ list=symbolList() ] <SEMI_COLON_TKN> 
+  {
+    module.setExports(list);
+  }
+}
+
+/////////////////////////////////////////////////////////
+// Imports
+/////////////////////////////////////////////////////////
+
+/**
+ * IMPORTS
+ *   symbolsImported();
+ */
+MibImports imports(String[] path) throws java.io.FileNotFoundException, MibException :
+{
+  MibImports importsObject;
+} 
+{ 
+  <IMPORTS_TKN> { importsObject=new MibImports(path); } [ symbolsImported(importsObject) ] <SEMI_COLON_TKN> 
+  {
+    return importsObject;
+  }
+}
+
+void symbolsImported(MibImports importsObject) throws java.io.FileNotFoundException, MibException : {} 
+{
+   symbolsFromModuleList(importsObject) 
+}
+
+/**
+ * MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+ * RowStatus FROM SNMPv2-TC
+ */
+void symbolsFromModuleList(MibImports importsObject) throws java.io.FileNotFoundException, MibException : {} 
+{ 
+   symbolsFromModule(importsObject) (symbolsFromModule(importsObject))*
+}
+
+/**
+ * MODULE-IDENTITY, OBJECT-TYPE FROM SNMPv2-SMI
+ */
+void symbolsFromModule(MibImports importsObject) throws java.io.FileNotFoundException, MibException :
+{
+  String module;
+  ArrayList list;
+} 
+{ 
+  list=symbolList() <FROM_TKN> module=moduleIdentifier()
+  {
+    String[] symbols = new String[list.size()];
+    symbols = (String[])list.toArray(symbols);
+    importsObject.addImports(module, symbols);
+  }
+}
+
+/**
+ * MODULE-IDENTITY, OBJECT-TYPE
+ */
+ArrayList symbolList() :
+{
+  ArrayList list = new ArrayList();
+  String s;
+} 
+{ 
+  s=symbol() { list.add(s); } (<COMMA_TKN> s=symbol() { list.add(s); })*
+  {
+    return list;
+  }
+}
+
+/**
+ * MODULE-IDENTITY
+ */
+String symbol() :
+{
+  String sym;
+  Syntax s;
+} 
+{ 
+  sym=typeReference() { return sym; }
+| sym=identifier() { return sym; }
+| sym=definedMacroName() { return sym; }
+| s=builtinType() { return s.toString(); }
+}
+
+/**
+ * RowStatus
+ * Reference to types defined externaly.
+ */
+String typeReference() :
+{
+  Token x;
+} 
+{ 
+  x=<UCASEFIRST_IDENT_TKN>  { return x.image; }
+}
+
+/**
+ * sysUpTime
+ * Identifier of objects defined in another file.
+ */
+String identifier() :
+{
+  Token x;
+} 
+{ 
+  x=<LCASEFIRST_IDENT_TKN>
+  {
+    return x.image;
+  }
+}
+
+/**
+ * MODULE-IDENTITY
+ * MACROS defined externaly.
+ */
+String definedMacroName() :
+{
+  Token x;
+} 
+{ 
+  x=<OBJECT_TYPE_TKN> { return x.image; }
+| x=<TRAP_TYPE_TKN> { return x.image; }
+// from SNMPv2-SMI
+| x=<MODULE_IDENTITY_TKN> { return x.image; }
+| x=<OBJECT_IDENTITY_TKN> { return x.image; }
+| x=<NOTIFICATION_TYPE_TKN> { return x.image; }
+// from SNMPv2-TC
+| x=<TC_TKN> { return x.image; }
+// from SNMPv2-CONF
+| x=<OBJECT_GROUP_TKN> { return x.image; }
+| x=<NOTIFICATION_GROUP_TKN> { return x.image; }
+| x=<MODULE_COMPLIANCE_TKN> { return x.image; }
+| x=<AGENT_CAPABILITIES_TKN> { return x.image; }
+}
+
+/**
+ * INTEGER
+ * ASN.1 and SNMP built in type (IpAddress, TimeTicks, INTEGER, ...)
+ */
+Syntax builtinType() :
+{
+  Token x;
+  Syntax s;
+} 
+{ 
+  s=integerType() { return s; }
+| x=<OCTET_STRING_TKN> { s=new Syntax(SnmpConstants.OCTETSTRING, x.image); return s; }
+| x=<OBJECT_IDENTIFIER_TKN> { s=new Syntax(SnmpConstants.OID, x.image); return s; }
+| s=bitsType() { return s; }
+| x=<IPADDRESS_TKN> { s=new Syntax(SnmpConstants.IPADDRESS, x.image); return s; }
+| x=<COUNTER32_TKN> { s=new Syntax(SnmpConstants.COUNTER32, x.image); return s; }
+| x=<GAUGE32_TKN> { s=new Syntax(SnmpConstants.GAUGE32, x.image); return s; }
+| x=<TIMETICKS_TKN> { s=new Syntax(SnmpConstants.TIMETICKS, x.image); return s; }
+| x=<OPAQUE_TKN> { s=new Syntax(SnmpConstants.OPAQUE, x.image); return s; }
+| x=<COUNTER64_TKN> { s=new Syntax(SnmpConstants.COUNTER64, x.image); return s; }
+| s=unsigned32Type() { return s; }
+| LOOKAHEAD(2) s=sequenceOfType() { return s; }
+| s=sequenceType() { return s; }
+}
+
+/**
+ * INTEGER { test(0), second(1) }
+ * Integer32 and INTEGER types
+ */
+Syntax integerType() :
+{
+  Token x;
+  Syntax s;
+  Enum enum = null;
+} 
+{ 
+  (x=<INTEGER_TKN> { s=new Syntax(SnmpConstants.INTEGER, x.image); } 
+|  x=<INTEGER32_TKN> { s=new Syntax(SnmpConstants.INTEGER32, x.image); })
+  [ <LEFTBRACE_TKN> enum=namedNumberList() <RIGHTBRACE_TKN> ]
+  {
+    if(enum!=null) {
+      s.setEnum(enum);
+    }
+    return s;
+  }
+}
+
+Enum namedNumberList() :
+{
+  Enum enum = new Enum();
+  Enum.Entry entry;
+} 
+{ 
+  entry=namedNumber() { enum.add(entry); } (<COMMA_TKN> entry=namedNumber() { enum.add(entry); })*
+  {
+    return enum;
+  }
+}
+
+Enum.Entry namedNumber() :
+{
+  String name;
+  String number;
+} 
+{ 
+  name=identifier() <LEFTPAREN_TKN> ( number=signedNumber() | number=definedValue()) <RIGHTPAREN_TKN>
+  {
+    return new Enum.Entry(name, number);
+  }
+}
+
+String signedNumber() :
+{
+  Token x;
+  StringBuffer str = new StringBuffer();
+} 
+{ 
+  [ x=<MINUS_TKN> { str.append(x.image); } ] ( x=<NUMBER_TKN> { str.append(x.image); } | x=<NUMBER_ERANGE_TKN> { str.append(x.image); } ) 
+  {
+    return str.toString();
+  }
+}
+
+/**
+ * DISMAN-EXPRESSION-MIB.expExpression
+ * A value defined in an external file.
+ */
+String definedValue() :
+{
+  String s;
+  Token x;
+  StringBuffer str = new StringBuffer();
+} 
+{ 
+ [ s=moduleReference() x=<DOT_TKN> { str.append(s); str.append(x.image); } ] s=identifier() { str.append(s); }
+  {
+    return str.toString();
+  }
+}
+
+/**
+ * BITS { existence(0), boolean(1), threshold(2) }
+ * The BITS construct.
+ */
+Syntax bitsType() :
+{
+  Token x;
+  Syntax s;
+  Enum enum = null;
+} 
+{ 
+  x=<BITS_TKN> { s=new Syntax(SnmpConstants.BITS, x.image); } [ <LEFTBRACE_TKN> enum=namedNumberList()  <RIGHTBRACE_TKN> ] 
+  {
+    if(enum!=null) {
+      s.setEnum(enum);
+    }
+    return s;
+  }
+}
+
+/**
+ * Unsigned32
+ * Unsigned32 type.
+ */
+Syntax unsigned32Type() :
+{
+  Token x;
+  Syntax s;
+  Enum enum = null;
+} 
+{ 
+  x=<UNSIGNED32_TKN> { s=new Syntax(SnmpConstants.UNSIGNED32, x.image); } [ <LEFTBRACE_TKN> enum=namedNumberList() <RIGHTBRACE_TKN> ]
+  {
+    if(enum!=null) {
+      s.setEnum(enum);
+    }
+    return s;
+  }
+}
+
+/**
+ * SEQUENCE OF some type
+ */
+Syntax sequenceOfType() :
+{
+  Syntax s;
+}
+{ 
+   <SEQUENCE_TKN> <OF_TKN> s=type()
+  {
+    return new Syntax(s, "SEQUENCE OF "+s.getDescription());
+  }
+}
+
+/**
+ * (Integer32 | MteTriggerDeltaEntry) (-1 | 1..600)
+ */
+Syntax type() :
+{
+  Syntax s;
+  Constraint c = null;
+}
+{ 
+  (LOOKAHEAD(2) s=builtinType() | s=definedType() ) [LOOKAHEAD(2) c=subtypeSpec()]
+  {
+    if(c!=null) {
+      s.setConstraint(c);
+    }
+    return s;
+  }
+}
+
+/**
+ * MteTriggerDeltaEntry
+ */
+Syntax definedType() :
+{
+  String module,typeRef;
+  StringBuffer str = new StringBuffer();
+  Enum enum = null;
+  Token x;
+}
+{  
+  [LOOKAHEAD(2) module=moduleReference() x=<DOT_TKN> {str.append(module); str.append(x.image);}] 
+  typeRef=typeReference() [ <LEFTBRACE_TKN> enum=namedNumberList() <RIGHTBRACE_TKN> ]
+  {
+    str.append(typeRef);
+    Syntax s = new Syntax(str.toString());
+    if(enum!=null) {
+      s.setEnum(enum);
+    }
+    return s;
+  }
+}
+
+/**
+ * (-1 | 1..600)
+ */
+Constraint subtypeSpec() :
+{
+  Constraint c;
+}
+{ 
+  <LEFTPAREN_TKN> c=subtypeValueSetList() <RIGHTPAREN_TKN> 
+  {
+    return c;
+  }
+}
+
+/**
+ * -1 | 1..600
+ */
+Constraint subtypeValueSetList() :
+{
+  Constraint c1 = null;
+  Constraint c2 = null;
+} 
+{ 
+  c1=subtypeValueSet() (<BAR_TKN> c2=subtypeValueSet())* 
+  {
+    Constraint c = null;
+    if(c1!=null && c2!=null) {
+      c = new UnionConstraint(c1, c2);
+    } else if(c1!=null) {
+      c = c1;
+    } else if(c2!=null) {
+      c = c2;
+    }
+    return c;
+  }
+}
+
+/**
+ * -1 | 1..600 | FROM (-1 | 1..21) | SIZE (1..21)
+ */
+Constraint subtypeValueSet() :
+{
+  Constraint c;
+} 
+{ 
+ ( c=valueRange() | c=permittedAlphabet() | c=sizeConstraint() )
+  {
+    return c;
+  }
+}
+
+/**
+ * 0..32
+ */
+Constraint valueRange() :
+{
+  String value1 = null;
+  String value2 = null;
+  Constraint c = null;
+} 
+{
+  value1=value() [ [ <LESSTHAN_TKN> ]  <DOT_TKN> <DOT_TKN> [ <LESSTHAN_TKN> ] value2=value() ]
+  {
+
+    if(value2==null) {
+      // Single value constraint
+      if("MAX".equals((String)value1))
+        c = new ValueConstraint(ValueConstraint.MAX);
+      else
+        c = new ValueConstraint(Long.parseLong(toDecimalString(value1)));
+
+    } else {
+      // Range constraint
+      if("MAX".equals((String)value2))
+        c = new RangeConstraint(Long.parseLong(toDecimalString(value1)), RangeConstraint.MAX);
+      else
+        c = new RangeConstraint(Long.parseLong(toDecimalString(value1)), Long.parseLong(toDecimalString(value2)));
+    }
+    return c;
+  }
+}
+
+/**
+ * -1 | "comment" | sysUpTime
+ */
+String value() :
+{
+  String s;
+  Object o;
+} 
+{ 
+  (LOOKAHEAD(2) o=builtinValue() {
+    if(o instanceof String) return (String)o;
+
+    if(o instanceof ArrayList) {
+      ArrayList list = (ArrayList)o;
+      StringBuffer str = new StringBuffer();
+      str.append("{");
+      for(Iterator i=list.iterator(); i.hasNext(); ) {
+        Object obj = i.next();
+        str.append(" ");
+        str.append(obj.toString());
+      }
+      str.append("}");
+      return str.toString();
+    }
+    return "";
+  }
+| s=definedValue()) {
+    return s;
+  }
+}
+
+Object builtinValue() :
+{
+  String s;
+  Object o;
+} 
+{ 
+  s=signedNumber() { return s; }
+| s=hexString() { return s; }
+| s=binaryString() { return s; }
+| s=charString() { return s; }
+| s=constant() { return s; }
+| o=compoundValue() { return o; }
+}
+
+/**
+ * '0abc10'h
+ */
+String hexString() :
+{
+  Token x;
+} 
+{ 
+  x=<HSTRING_TKN> 
+  {
+    return x.image;
+  }
+}
+
+/**
+ * '00110111'b
+ */
+String binaryString() :
+{
+  Token x;
+} 
+{ 
+  x=<BSTRING_TKN> 
+  {
+    return x.image;
+  }
+}
+
+/**
+ * "comment"
+ */
+String charString() :
+{
+  Token x;
+} 
+{ 
+  x=<CSTRING_TKN> 
+  {
+    return x.image;
+  }
+}
+
+/**
+ * MAX
+ */
+String constant() :
+{
+  Token x;
+} 
+{ 
+  x=<UCASEFIRST_IDENT_TKN> 
+  {
+    return x.image;
+  }
+}
+
+/**
+ * { internet 1 }
+ */
+ArrayList compoundValue() :
+{
+  ArrayList list = null;
+}
+{
+  <LEFTBRACE_TKN> ( list=objIdComponentList() | skip_to_matching_brace() ) <RIGHTBRACE_TKN> 
+  {
+    return list;
+  }
+      
+}
+
+ArrayList objIdComponentList() :
+{
+  ArrayList list = new ArrayList();
+  Object s;
+} 
+{ 
+  s=objIdComponent() { list.add(s); } (s=objIdComponent() { list.add(s); } )*
+  {
+    return list;
+  }
+}
+
+Object objIdComponent() :
+{
+  Object o;
+} 
+{ 
+  ( o=numberForm() | o=nameAndNumberForm())
+  {
+    return o;
+  }
+}
+
+String numberForm() :
+{
+  String number;
+} 
+{ 
+  number=number() 
+  {
+    return number;
+  }
+}
+
+String number() :
+{
+  Token x;
+} 
+{ 
+  (x=<NUMBER_TKN> | x=<NUMBER_ERANGE_TKN>)
+  {
+    return x.image;
+  }
+}
+
+NamedNumber nameAndNumberForm() :
+{
+  String name = null;
+  String number = null;
+}
+{ 
+  name=identifier() [<LEFTPAREN_TKN> (number=number() | number=definedValue()) <RIGHTPAREN_TKN>]
+  {
+    return new NamedNumber(name, number);
+  }
+}
+
+JAVACODE
+void skip_to_matching_brace() {
+  Token tok;
+  int nesting = 1;
+  while (true) {
+    tok = getToken(1);
+    if (tok.kind == LEFTBRACE_TKN) nesting++;
+    if (tok.kind == RIGHTBRACE_TKN) {
+      nesting--;
+         if (nesting == 0) break;
+    }
+    tok = getNextToken();
+  }
+}
+
+Constraint permittedAlphabet() :
+{
+  Constraint c;
+} 
+{ 
+  <FROM_TKN> c=subtypeSpec() 
+  {
+    return c;
+  }
+}
+
+/**
+ * SIZE (0..32)
+ */
+Constraint sizeConstraint() :
+{
+  Constraint c;
+} 
+{ 
+  <SIZE_TKN> c=subtypeSpec() 
+  {
+    return new SizeConstraint(c);
+  }
+}
+
+/**
+ * SEQUENCE { elements() }
+ */
+/**
+ * SEQUENCE { elements() }
+ */
+Syntax sequenceType() :
+{
+  Sequence sequence = null;
+  Syntax s;
+  Token x;
+}
+{ 
+  x=<SEQUENCE_TKN> <LEFTBRACE_TKN> [ sequence=elementTypeList() ] <RIGHTBRACE_TKN>
+  {
+    s = new Syntax();
+    s.setSequence(sequence);
+    return s;
+  }
+}
+
+Sequence elementTypeList() :
+{
+  Sequence sequence = new Sequence();
+  Sequence.Entry entry;
+} 
+{ 
+   entry=elementType() { sequence.add(entry); } (<COMMA_TKN> entry=elementType() { sequence.add(entry); } )*
+  {
+    return sequence;
+  }
+}
+
+Sequence.Entry elementType() :
+{
+  Sequence.Entry entry;
+}
+{ 
+//( namedType() [ (<OPTIONAL_TKN>) ] )
+  entry=namedType()
+  {
+    return entry;
+  }
+}
+
+/**
+ * mteTriggerBooleanValue Integer32
+ */
+Sequence.Entry namedType() :
+{
+  String name = null;
+  Syntax s;
+}
+{ 
+  [LOOKAHEAD(2) name=identifier()] s=type()
+  {
+    if(name==null) name="";
+    return new Sequence.Entry(name, s);
+  }
+}
+
+/**
+ * SNMPv2-SMI
+ * The module where imports come from.
+ */
+String moduleIdentifier() :
+{
+  String name;
+}
+{
+  name=moduleReference() [ assignIdentifier() ]
+  {
+    return name;
+  }
+}
+
+void assignIdentifier() : {}
+{
+  objectIdentifierValue()
+}
+
+/**
+ * { mteTriggerBooleanTable 1 }
+ */
+void objectIdentifierValue() : {} 
+{ 
+   <LEFTBRACE_TKN> objIdComponentList() <RIGHTBRACE_TKN> 
+}
+
+/////////////////////////////////////////////////////////
+// Assignments
+/////////////////////////////////////////////////////////
+
+/**
+ * directory OBJECT IDENTIFIER ::= { internet 1 }
+ * All that have the ::= symbol.
+ */
+void assignmentList(MibModule module) throws MibException : {} 
+{ 
+  assignment(module) [<SEMI_COLON_TKN>] ( assignment(module) [<SEMI_COLON_TKN>] )*
+}
+
+void assignment(MibModule module) throws MibException : {} 
+{ 
+  LOOKAHEAD(2) macroDefinition(module) | typeAssignment(module) | valueAssignment(module)
+}
+
+/**
+ * TEXTUAL-CONVENTION MACRO ::=
+ *   BEGIN
+ *     TYPE NOTATION ::=
+ *       DisplayPart
+ *       "STATUS" status
+ * ...
+ */
+void macroDefinition(MibModule module) : {} 
+{
+   (LOOKAHEAD(2) <TC_TKN> | LOOKAHEAD(2) <OBJECT_TYPE_TKN> | macroReference()) <MACRO_TKN> <GETS_TKN> 
+	<BEGIN_TKN>  macroBody() <END_TKN>
+}
+
+/**
+ * Macro body does not appear in MIBs(?).
+ */
+JAVACODE
+void macroBody() {	
+  Token tok;
+  int nesting = 1;
+  while (true) {
+    tok = getToken(1);
+    if (tok.kind == END_TKN) {
+	break;	
+    }
+    tok = getNextToken();
+  }
+}
+
+/**
+ * Url | TEXTUAL-CONVENTION
+ */
+void macroReference() : {} 
+{ 
+   typeReference() | definedMacroName() 
+}
+
+/**
+ * Url ::= TEXTUAL-CONVENTION
+ *   DISPLAY-HINT "255a"
+ *   STATUS Current
+ *   DESCRIPTION "descr"
+ *   SYNTAX OCTET STRING (SIZE(0..255))
+ *
+ * Assignment of types (start with upper case letter).
+ */
+void typeAssignment(MibModule module) :
+{
+  String typeRef;
+  Object macroOrType;
+}
+{
+  typeRef=typeReference() <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof Macro) {
+      ((Macro)macroOrType).setLabel(typeRef);
+    }
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+  
+    } else if(macroOrType instanceof MibIdentity) {
+      module.setIdentity((MibIdentity)macroOrType);
+    }
+  }
+// To allow the redefinition of builtin types
+| <UNSIGNED32_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+| <GAUGE32_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+| <IPADDRESS_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+| <INTEGER32_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+| <TIMETICKS_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+| <COUNTER32_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+| <COUNTER64_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+| <OPAQUE_TKN> <GETS_TKN> macroOrType=globalType(module)
+  {
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+    }
+  }
+}
+
+/**
+ * ((Integer32 | MteTriggerDeltaEntry) (-1 | 1..600)) | TEXTUAL-CONVENTION ...
+ */
+Object globalType(MibModule module) :
+{
+  Syntax s=null;
+  Macro c=null;
+}
+{
+  LOOKAHEAD(2) s=type() { return s; } | c=definedMacroType(module) 
+  {
+    return c;
+  }
+}
+
+/**
+ * TEXTUAL-CONVENTION
+ *   DISPLAY-HINT "255a"
+ *   STATUS Current
+ *   DESCRIPTION "descr"
+ *   SYNTAX OCTET STRING (SIZE(0..255))
+ */
+Macro definedMacroType(MibModule module) :
+{
+  Macro c;
+} 
+{
+  c=moduleIdentityMacroType()  { return c; }
+| c=textualConventionMacroType()  { return c; }
+| c=snmpObjectTypeMacroType(module)  { return c; }
+| c=moduleComplianceMacroType()  { return c; }
+| c=objectGroupMacroType()  { return c; }
+| c=objectIdentityMacroType()  { return c; }
+| c=snmpTrapTypeMacroType()  { return c; }
+| c=notificationTypeMacroType()  { return c; }
+| c=notificationGroupMacroType()  { return c; }
+| c=choiceMacroType()  { return c; }
+| c=applicationMacroType() { return c; }
+}
+
+/**
+ * MODULE-IDENTITY
+ *   LAST-UPDATED "200010160000Z"
+ *   ORGANIZATION "IETF"
+ *   CONTACT-INFO "contact"
+ *   DESCRIPTION "descr"
+ *   REVISION "200010160000Z"
+ *   DESCRIPTION "descr"
+ */
+MibIdentity moduleIdentityMacroType() :
+{
+  String lastUpdated;
+  String organization;
+  String contactInfo;
+  String descr;
+  ArrayList list=null;
+}
+{
+  <MODULE_IDENTITY_TKN> lastUpdated=lastUpdated() organization=organization() contactInfo=contactInfo() descr=snmpDescrPart() [ list=revisionPart() ]
+  {
+    MibIdentity id = new MibIdentity();
+    id.setLastUpdated(lastUpdated);
+    id.setOrganization(organization);
+    id.setContactInfo(contactInfo);
+    id.setDescription(descr);
+    if(list!=null) {
+      for(Iterator i=list.iterator(); i.hasNext(); ) {
+        String rev = (String)i.next();
+        id.addRevision(rev);
+      }
+    }
+    return id;
+  }
+}
+
+String lastUpdated() :
+{
+  String s;
+}
+{
+  <LAST_UPDATED_TKN> s=charString()
+  {
+    return s;
+  }
+}
+
+String organization() :
+{
+  String s;
+}
+{
+  <ORGANIZATION_TKN> s=charString()
+  {
+    return s;
+  }
+}
+
+String contactInfo() :
+{
+  String s;
+}
+{
+  <CONTACT_INFO_TKN> s=charString()
+  {
+    return s;
+  }
+}
+
+ArrayList revisionPart() :
+{
+  ArrayList list = new ArrayList();
+  String s;
+}
+{
+  s=revision() { list.add(s); } (s=revision() { list.add(s); } )*
+  {
+    return list;
+  }
+}
+
+String revision() :
+{
+  String s;
+  StringBuffer str = new StringBuffer();
+}
+{
+  <REVISION_TKN> s=charString() { str.append(s); str.append(" - "); } s=snmpDescrPart() { str.append(s); }
+  {
+    return str.toString();
+  }
+}
+
+/**
+ * TEXTUAL-CONVENTION
+ *   DISPLAY-HINT "255a"
+ *   STATUS Current
+ *   DESCRIPTION "descr"
+ *   SYNTAX OCTET STRING (SIZE(0..255))
+ */
+MibTC textualConventionMacroType() :
+{
+  String display="";
+  String status;
+  String descr="";
+  String ref="";
+  Syntax s;
+}
+{
+  <TC_TKN> [ display=displayHint() ] <STATUS_TKN> status=snmpStatus() [ descr=snmpDescrPart() ] [ ref=snmpReferPart() ] <SYNTAX_TKN> s=type()
+  {
+    MibTC tc = new MibTC();
+    tc.setDisplayHint(display);
+    tc.setStatus(status);
+    tc.setDescription(descr);
+    tc.setReference(ref);
+    tc.setSyntax(s);
+    return tc;
+  }
+}
+
+String displayHint() :
+{
+  String s;
+}
+{
+  <DHINT_TKN> s=charString()
+  {
+    return s;
+  }
+}
+
+/**
+ * current
+ */
+String snmpStatus() :
+{
+  String s;
+} 
+{ 
+  s=identifier() 
+  {
+    return s;
+  }
+}
+
+/**
+ * DESCRIPTION "descr"
+ */
+String snmpDescrPart() :
+{
+  String s;
+} 
+{ 
+  <DESCRIPTION_TKN> s=charString()
+  {
+    return s;
+  }
+}
+
+/**
+ * REFERENCE "ref"
+ */
+String snmpReferPart() :
+{
+  String s;
+} 
+{ 
+  <REFERENCE_TKN> s=charString()
+  {
+    return s;
+  }
+}
+
+/**
+ * OBJECT-TYPE
+ *   SYNTAX Integer32 (-1 | 1..600)
+ *   MAX-ACCESS read-write
+ *   STATUS current
+ */
+ObjectType snmpObjectTypeMacroType(MibModule module) :
+{
+  ObjectType obj = new ObjectType();
+  Syntax s;
+  String units="";
+  String access;
+  String status;
+  String descr="";
+  String ref="";
+  String defval="";
+} 
+{ 
+  <OBJECT_TYPE_TKN> <SYNTAX_TKN> s=type() [ units=units() ] access=snmpAccess() <STATUS_TKN> status=snmpStatus() [descr=snmpDescrPart()] [ref=snmpReferPart()] 
+       [snmpIndexPart(obj, module)] [defval=snmpDefValPart()] 
+  {
+    obj.setSyntax(s);
+    obj.setUnits(units);
+    obj.setAccess(access);
+    obj.setStatus(status);
+    obj.setDescription(descr);
+    obj.setReference(ref);
+    obj.setDefVal(defval);
+    return obj;
+  }
+}
+
+String units() :
+{
+  String s;
+}
+{
+  <UNITS_TKN> s=charString()
+  {
+    return s;
+  }
+}
+
+/**
+ * MAX-ACCESS read-write
+ */
+String snmpAccess() :
+{
+  String s;
+} 
+{ 
+  (<ACCESS_TKN> | <MAX_ACCESS_TKN> | <MIN_ACCESS_TKN>) s=identifier() 
+  {
+    return s;
+  }
+}
+
+/**
+ * INDEX { expExpressionOwner, expExpressionName }
+ */
+void snmpIndexPart(ObjectType obj, MibModule module) :
+{
+  Token x;
+} 
+{ 
+  (x=<INDEX_TKN> | x=<AUGMENTS_TKN>) <LEFTBRACE_TKN> typeOrValueList(obj) <RIGHTBRACE_TKN> 
+  {
+    obj.setAugments(x.kind==SMIParserConstants.AUGMENTS_TKN);
+    rebuildAugmentsIndexes(obj, module);
+  }
+}
+
+/**
+ * expExpressionOwner, expExpressionName
+ */
+void typeOrValueList(ObjectType obj) : {} 
+{ 
+  typeOrValue(obj) (<COMMA_TKN> typeOrValue(obj))*
+}
+
+/**
+ * expExpressionOwner
+ */
+void typeOrValue(ObjectType obj) :
+{
+  String s;
+  MibNode indexNode;
+} 
+{ 
+  LOOKAHEAD(3) type() | s=value()
+ { 
+    obj.addIndex(s);
+ }
+ | s=impliedValue()
+ {
+    obj.addImpliedIndex(s);
+ }
+}
+
+String impliedValue() :
+{
+  String s;
+} 
+{
+  <IMPLIED_TKN> s=value()
+  {
+    return s;
+  }
+}
+
+/**
+ * DEFVAL { Counter32 }
+ */
+String snmpDefValPart() :
+{
+  String s="";
+} 
+{ 
+  <DEFVAL_TKN> <LEFTBRACE_TKN> (LOOKAHEAD(3) s=value() | LOOKAHEAD(3) [s=bitsValue()]) <RIGHTBRACE_TKN> 
+  {
+    return s;
+  }
+}
+
+String bitsValue() :
+{
+  StringBuffer str = new StringBuffer();
+  ArrayList list = null;
+}
+{
+  <LEFTBRACE_TKN> [list=bitNames()] <RIGHTBRACE_TKN>
+  {
+    str.append("{ ");
+    if(list!=null) {
+      for(Iterator i=list.iterator(); i.hasNext(); ) {
+        String s = (String)i.next();
+        str.append(s);
+        if(i.hasNext()) {
+          str.append(", ");
+        }
+      }
+    }
+    str.append(" }");
+    return str.toString();
+  }
+}
+
+ArrayList bitNames() :
+{
+  ArrayList list = new ArrayList();
+  String s;
+}
+{
+  s=identifier() { list.add(s); } (<COMMA_TKN> identifier() { list.add(s); } )*
+  {
+    return list;
+  }
+}
+
+/**
+ * MODULE-COMPLIANCE
+ *   STATUS current
+ *   DESCRIPTION "descr"
+ *   REFERENCE "ref"
+ *   MODULE 
+ *   ...
+ */
+MibCompliance moduleComplianceMacroType() :
+{
+  String status;
+  String descr;
+  String ref="";
+  MibCompliance c = new MibCompliance();
+  ArrayList list;
+}
+{
+  <MODULE_COMPLIANCE_TKN> <STATUS_TKN> status=snmpStatus() descr=snmpDescrPart() [ref=snmpReferPart()] list=modulePart()
+  {
+    c.setStatus(status);
+    c.setDescription(descr);
+    c.setReference(ref);
+    for(Iterator i=list.iterator(); i.hasNext(); ) {
+      ComplianceModule module = (ComplianceModule)i.next();
+      c.addObject(module);
+    }
+    return c;
+  }
+}
+
+ArrayList modulePart() :
+{
+  ArrayList list = new ArrayList();
+  ComplianceModule module;
+}
+{
+  module=module() { list.add(module); } (module=module() { list.add(module); })*
+  {
+    return list;
+  }
+}
+
+ComplianceModule module() :
+{
+  ComplianceModule module = new ComplianceModule();
+  String mName="";
+}
+{
+  <MODULE_TKN> [LOOKAHEAD(2) mName=moduleReference()] [LOOKAHEAD(2) mandatoryPart(module)] [LOOKAHEAD(2) compliancePart(module)]
+  {
+    module.setModuleId(mName);
+    return module;
+  }
+}
+
+void mandatoryPart(ComplianceModule module) :
+{
+  ArrayList list;
+}
+{
+  <MANDATORY_GROUPS_TKN> <LEFTBRACE_TKN> list=groups() <RIGHTBRACE_TKN>
+  {
+    for(Iterator i=list.iterator(); i.hasNext(); ) {
+      String grp = (String)i.next();
+      module.addGroup(grp);
+    }
+  }
+}
+
+ArrayList groups() :
+{
+  ArrayList list = new ArrayList();
+  String s;
+}
+{
+  s=group() { list.add(s); } (<COMMA_TKN> group() { list.add(s); })*
+  {
+    return list;
+  }
+}
+
+String group() :
+{
+  String s;
+}
+{
+  s=value()
+  {
+    return s;
+  }
+}
+
+void compliancePart(ComplianceModule module) : {}
+{
+  compliance(module) (compliance(module))*
+}
+
+void compliance(ComplianceModule module) :
+{
+  String s1, s2;
+  Syntax s=null, ws=null;
+  String s3="";
+}
+{
+  <GROUP_TKN> s1=value() s2=snmpDescrPart()
+  {
+    ComplianceGroup grp = new ComplianceGroup(s1);
+    grp.setDescription(s2);
+    module.addComplianceGroup(grp);
+  }
+| <OBJECT_TKN> s1=value() [<SYNTAX_TKN> s=type()] [<WRITE_SYNTAX_TKN> ws=type()] [s3=snmpAccess()] s2=snmpDescrPart() 
+  {
+    ComplianceObject obj = new ComplianceObject(s1);
+    obj.setSyntax(s);
+    obj.setWriteSyntax(ws);
+    obj.setAccess(s3);
+    obj.setDescription(s2);
+    module.addComplianceObject(obj);
+  }
+}
+
+/**
+ * OBJECT-GROUP
+ *   OBJECTS { ... }
+ *   STATUS current
+ *   DESCRIPTION "descr"
+ *   REFERENCE "ref"
+ */
+ObjectGroup objectGroupMacroType() :
+{
+  ArrayList list=null;
+  String status;
+  String descr;
+  String ref="";
+}
+{
+  <OBJECT_GROUP_TKN> [list=objects()] <STATUS_TKN> status=snmpStatus() descr=snmpDescrPart() [ref=snmpReferPart()]
+  {
+    ObjectGroup group = new ObjectGroup();
+    if(list!=null) {
+      for(Iterator i=list.iterator(); i.hasNext(); ) {
+        String obj = (String)i.next();
+        group.addObject(obj);
+      }
+    }
+    group.setStatus(status);
+    group.setDescription(descr);
+    group.setReference(ref);
+    return group;
+  }
+}
+
+ArrayList objects() :
+{
+  ArrayList list;
+}
+{
+  <OBJECTS_TKN> <LEFTBRACE_TKN> list=objs() <RIGHTBRACE_TKN> 
+  {
+    return list;
+  }
+}
+
+ArrayList objs() :
+{
+  ArrayList list = new ArrayList();
+  String obj;
+}
+{
+  obj=obj() { list.add(obj); } (<COMMA_TKN> obj=obj() { list.add(obj); })*
+  {
+    return list;
+  }
+}
+
+String obj():
+{
+  String s;
+}
+{
+  s=value()
+  {
+    return s;
+  }
+}
+
+
+/**
+ * TRAP-TYPE
+ *   ENTERPRISE snmp
+ *   VARIABLES { egpNeighAddr }
+ *   DESCRIPTION "descr"
+ *   REFERENCE "ref"
+ */
+MibTrap snmpTrapTypeMacroType() :
+{
+  String s;
+  ArrayList list=null;
+  String descr="";
+  String ref="";
+}
+{ 
+  <TRAP_TYPE_TKN> <ENTERPRISE_TKN> s=identifier() [ list=trapVariables() ] [descr=snmpDescrPart()] [ref=snmpReferPart()]
+  {
+    MibTrap trap = new MibTrap();
+    trap.setEnterpriseLabel(s);
+    if(list!=null) {
+      for(Iterator i=list.iterator(); i.hasNext(); ) {
+        String var = (String)i.next();
+        trap.addVar(var);
+      }
+    }
+    trap.setDescription(descr);
+    trap.setReference(ref);
+    return trap;
+  }
+}
+
+ArrayList trapVariables() :
+{
+  ArrayList list;
+}
+{
+  <VARIABLES_TKN> <LEFTBRACE_TKN> list=symbolList() <RIGHTBRACE_TKN>
+  {
+    return list;
+  }
+}
+
+/**
+ * NOTIFICATION-TYPE
+ *   OBJECTS { ... }
+ *   STATUS current
+ *   DESCRIPTION "descr"
+ *   REFERENCE "ref"
+ */
+NotificationType notificationTypeMacroType() :
+{
+  ArrayList list=null;
+  String status;
+  String descr;
+  String ref="";
+}
+{
+  <NOTIFICATION_TYPE_TKN> [list=objects()] <STATUS_TKN> status=snmpStatus() descr=snmpDescrPart() [ref=snmpReferPart()]
+  {
+    NotificationType not = new NotificationType();
+    if(list!=null) {
+      for(Iterator i=list.iterator(); i.hasNext(); ) {
+        String obj = (String)i.next();
+        not.addObject(obj);
+      }
+    }
+    not.setStatus(status);
+    not.setDescription(descr);
+    not.setReference(ref);
+    return not;
+  }
+}
+
+/**
+ * NOTIFICATION-GROUP
+ *   NOTIFICATIONS { ... }
+ *   STATUS current
+ *   DESCRIPTION "descr"
+ *   REFERENCE "ref"
+ */
+NotificationGroup notificationGroupMacroType() :
+{
+  ArrayList list=null;
+  String status;
+  String descr;
+  String ref="";
+}
+{
+  <NOTIFICATION_GROUP_TKN> [list=notifications()] <STATUS_TKN> status=snmpStatus() descr=snmpDescrPart() [ref=snmpReferPart()]
+  {
+    NotificationGroup not = new NotificationGroup();
+    if(list!=null) {
+      for(Iterator i=list.iterator(); i.hasNext(); ) {
+        String obj = (String)i.next();
+        not.addNotification(obj);
+      }
+    }
+    not.setStatus(status);
+    not.setDescription(descr);
+    not.setReference(ref);
+    return not;
+  }
+}
+
+ArrayList notifications() :
+{
+  ArrayList list;
+}
+{
+  <NOTIFICATIONS_TKN> <LEFTBRACE_TKN> list=objs() <RIGHTBRACE_TKN>
+  {
+    return list;
+  }
+}
+
+/**
+ * CHOICE {
+ *   simple
+ *     SimpleSyntax,
+ *   application-wide
+ *   ApplicationSyntax
+ * }
+ */
+Choice choiceMacroType() :
+{
+  ArrayList list=null;
+}
+{
+  <CHOICE_TKN> <LEFTBRACE_TKN> list=choices() <RIGHTBRACE_TKN>
+  {
+    Choice c = new Choice();
+    c.setChoiceList(list);
+    return c;
+  }
+}
+
+ArrayList choices() :
+{
+  ArrayList list = new ArrayList();
+  Choice.Entry obj;
+}
+{
+  obj=choice() { list.add(obj); } (<COMMA_TKN> obj=choice() { list.add(obj); })*
+  {
+    return list;
+  }
+}
+
+Choice.Entry choice():
+{
+  String s;
+  Syntax t;
+}
+{
+  s=identifier() t=type()
+  {
+    return new Choice.Entry(s, t);
+  }
+}
+
+/**
+ * [APPLICATION 3]
+ *   IMPLICIT INTEGER (0..4294967295)
+ */
+Macro applicationMacroType() :
+{
+  String s;
+  Syntax syntax;
+}
+{
+  <LEFTBRACKET_TKN> <APPLICATION_TKN> s=number() <RIGHTBRACKET_TKN> <IMPLICIT_TKN> syntax=type()
+  {
+    Macro m = new Macro();
+    m.setDescription(new String("[APPLICATION "+s+"] IMPLICIT "+syntax));
+    return m;
+  }
+}
+
+/**
+ * OBJECT-IDENTITY
+ *   STATUS current
+ *   DESCRIPTION "descr"
+ *   REFERENCE "ref"
+ */
+ObjectIdentity objectIdentityMacroType() :
+{
+  String status;
+  String descr;
+  String ref="";
+}
+{
+  <OBJECT_IDENTITY_TKN> <STATUS_TKN> status=snmpStatus() descr=snmpDescrPart() [ref=snmpReferPart()]
+  {
+    ObjectIdentity id = new ObjectIdentity();
+    id.setStatus(status);
+    id.setDescription(descr);
+    id.setReference(ref);
+    return id;
+  }
+}
+
+/**
+ * mgmt OBJECT IDENTIFIER ::= { iso org(3) dod(6) internet(1) mgmt(2) }
+ */
+void valueAssignment(MibModule module) throws MibException :
+{
+  String id;
+  Object macroOrType;
+  Object value=null;
+  MibNode node=null;
+  Token x;
+}
+{     
+  id=identifier() macroOrType=globalType(module) x=<GETS_TKN> [ LOOKAHEAD(2) identifier() [<SELECTOR_TKN>] ] [ LOOKAHEAD(2) value=builtinValue() ]
+  {
+    if(macroOrType instanceof Macro) {
+      ((Macro)macroOrType).setLabel(id);
+      ((Macro)macroOrType).setModule(module);
+    }
+    if(macroOrType instanceof MibNode) {
+      node = (MibNode)macroOrType;
+    }
+
+    if(macroOrType instanceof MibTC) {
+      module.addMibTC((MibTC)macroOrType);
+
+    } else if(macroOrType instanceof MibTrap) {
+      MibTrap trap = (MibTrap)macroOrType;
+      trap.setLabel(id);
+      MibNode enterpriseNode = module.getNode(trap.getEnterpriseLabel());
+      trap.setEnterprise(enterpriseNode.getOID());
+      try {
+        trap.setNumber((String)value);
+      } catch(NumberFormatException e) {
+        throw new MibException(e.getMessage(), fileName, id, x.beginLine, x.beginColumn);
+      }
+      module.addMibTrap((MibTrap)macroOrType);
+
+    } else if(macroOrType instanceof MibIdentity) {
+      module.setIdentity((MibIdentity)macroOrType);
+      //module.setRoot((MibIdentity)macroOrType);
+    }
+
+    if(macroOrType instanceof Syntax) {
+      Syntax s = (Syntax)macroOrType;
+      node = new MibNode();
+      node.setLabel(id);
+    }
+
+    // If the Macro corresponds to some OID based object
+    if(node!=null) {
+
+      // If o is ArrayList is of the form { dismanEventMIB 1 }
+      if(value instanceof ArrayList) {
+        ArrayList list = (ArrayList)value;
+        int level = list.size()-1;
+        try {
+          connect(node, list, level, module);
+        } catch(Exception e) {
+          //e.printStackTrace();
+          throw new MibException(e.getMessage(), fileName, macroOrType.toString(), x.beginLine, x.beginColumn);
+        }
+      }
+    }
+  }
+}
+
